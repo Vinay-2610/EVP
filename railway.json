@@ -1,9 +1,10 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "cd ev_route_planner_backend/backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    "startCommand": "uvicorn ev_route_planner_backend.backend.main:app --host 0.0.0.0 --port $PORT"
   }
 }
