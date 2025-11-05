@@ -18,15 +18,21 @@ GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-if not GOOGLE_MAPS_API_KEY:
-    raise ValueError("❌ GOOGLE_MAPS_API_KEY not found. Please check your .env file.")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Supabase credentials not found. Please check your .env file.")
+# --------------------------------------------------
+# Supabase Connection (lazy initialization)
+# --------------------------------------------------
+supabase = None
 
-# --------------------------------------------------
-# Supabase Connection
-# --------------------------------------------------
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+def get_supabase():
+    global supabase
+    if supabase is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise HTTPException(status_code=500, detail="Supabase credentials not configured")
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to connect to Supabase: {str(e)}")
+    return supabase
 
 # --------------------------------------------------
 # FastAPI Setup
@@ -77,7 +83,7 @@ def get_route_data(from_loc: str, to_loc: str):
 # Fetch EV model from Supabase (by id or name)
 # --------------------------------------------------
 def get_ev_model(ev_model_id: Optional[int], ev_model_name: Optional[str]) -> Optional[Dict[str, Any]]:
-    q = supabase.table("ev_models").select("*")
+    q = get_supabase().table("ev_models").select("*")
     if ev_model_id:
         q = q.eq("ev_model_id", ev_model_id)
     elif ev_model_name:
@@ -183,11 +189,36 @@ def sample_route_points(path: List[List[float]], sample_km: int = 60) -> List[Li
     return samples
 
 # --------------------------------------------------
+# Startup Event
+# --------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Starting EV Route Planner Backend...")
+    print(f"✅ Google Maps API Key: {'Set' if GOOGLE_MAPS_API_KEY else '❌ Missing'}")
+    print(f"✅ Supabase URL: {'Set' if SUPABASE_URL else '❌ Missing'}")
+    print(f"✅ Supabase Key: {'Set' if SUPABASE_KEY else '❌ Missing'}")
+    
+    # Test Supabase connection
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            get_supabase()
+            print("✅ Supabase connection successful")
+        except Exception as e:
+            print(f"⚠️  Supabase connection warning: {str(e)}")
+
+# --------------------------------------------------
 # Root
 # --------------------------------------------------
 @app.get("/")
 def home():
-    return {"message": "EV Route Planner Backend running ⚡"}
+    return {
+        "message": "EV Route Planner Backend running ⚡",
+        "status": "healthy",
+        "config": {
+            "google_maps_api": "configured" if GOOGLE_MAPS_API_KEY else "missing",
+            "supabase": "configured" if (SUPABASE_URL and SUPABASE_KEY) else "missing"
+        }
+    }
 
 # --------------------------------------------------
 # POST /trip - unchanged
@@ -198,7 +229,7 @@ def create_trip(trip: TripInput):
     battery_efficiency = 1.2
     est_battery_usage = distance_km / battery_efficiency
     battery_end = max(trip.battery_percent - (est_battery_usage / 100 * trip.battery_percent), 0)
-    response = supabase.table("trips").insert({
+    response = get_supabase().table("trips").insert({
         "user_id": trip.user_id,
         "source": trip.from_location,
         "destination": trip.to_location,
@@ -228,7 +259,7 @@ def create_trip(trip: TripInput):
 # --------------------------------------------------
 @app.get("/trips")
 def get_trips(user_id: Optional[str] = None):
-    q = supabase.table("trips").select("*")
+    q = get_supabase().table("trips").select("*")
     if user_id:
         q = q.eq("user_id", user_id)
     resp = q.execute()
@@ -265,7 +296,7 @@ def get_nearest_charging_stations(lat: float, lng: float, radius: int = 5000):
 def list_ev_models():
     try:
         # use desc=False to indicate ascending order (client supports this signature)
-        resp = supabase.table("ev_models").select("*").order("model_name", desc=False).execute()
+        resp = get_supabase().table("ev_models").select("*").order("model_name", desc=False).execute()
         return {"models": resp.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching EV models: {str(e)}")
